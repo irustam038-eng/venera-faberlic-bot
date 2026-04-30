@@ -28,22 +28,20 @@ log = logging.getLogger("bot")
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 GULCHACHAK_LINK = os.getenv("GULCHACHAK_LINK", "https://t.me/Gulchachak_faberlic")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "")          # например @gulchachak_club или -1001234567890
-CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")      # публичная ссылка на канал
+CHANNEL_ID = os.getenv("CHANNEL_ID", "")
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")
+REG_LINK = "https://faberlic.com/register?sponsornumber=739945401&lang=ru&r=1000034210371"
+
 MEDIA_DIR = Path(__file__).parent / "media"
 MEDIA_DIR.mkdir(exist_ok=True)
-
-# file_id PDF-гайда — кешируется после первой отправки
-_guide_file_id: str | None = None
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# Экономия по тратам (в месяц, ~23% от суммы)
 SPEND_SAVING = {
-    "low":    (2000,  460,   5520),   # трат/мес, экономия/мес, экономия/год
-    "mid":    (3500,  800,   9600),
-    "high":   (6000,  1380,  16560),
+    "low":  (2000,  460,   5520),
+    "mid":  (3500,  800,   9600),
+    "high": (6000,  1380,  16560),
 }
 
 SOURCE_LABELS = {
@@ -57,14 +55,14 @@ def label_source(src):
     return SOURCE_LABELS.get((src or "").lower(), f"🌐 {src or 'прямой вход'}")
 
 
-# --- FSM ---
 class Form(StatesGroup):
     quiz_spend = State()
     waiting_for_name = State()
     waiting_for_phone = State()
 
 
-# --- ХЕЛПЕРЫ ---
+# ─── ХЕЛПЕРЫ ────────────────────────────────────────────────────────────────
+
 async def typing(chat_id, sec=1.5):
     try:
         await bot.send_chat_action(chat_id, ChatAction.TYPING)
@@ -97,52 +95,24 @@ async def send_video_note_if_exists(chat_id, filename):
         return False
 
 
-async def send_voice_if_exists(chat_id, filename):
-    p = MEDIA_DIR / filename
-    if not p.exists():
-        return False
-    try:
-        await bot.send_voice(chat_id, types.FSInputFile(p))
-        return True
-    except Exception as e:
-        log.warning(f"voice {filename}: {e}")
-        return False
+def reg_kb():
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="✅ Зарегистрироваться", url=REG_LINK))
+    b.row(types.InlineKeyboardButton(text="❓ Есть вопросы", callback_data="faq"))
+    b.row(types.InlineKeyboardButton(text="🙋 Хочу чтобы помогли", callback_data="need_help"))
+    return b.as_markup()
 
 
-async def is_subscribed(user_id: int) -> bool:
-    if not CHANNEL_ID:
-        return True  # канал не настроен — пропускаем проверку
-    try:
-        member = await bot.get_chat_member(CHANNEL_ID, user_id)
-        return member.status not in ("left", "kicked")
-    except Exception as e:
-        log.warning(f"check subscription {user_id}: {e}")
-        return False
+def after_reg_kb():
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="✅ Да, зарегистрировалась!", callback_data="reg_done"))
+    b.row(types.InlineKeyboardButton(text="😕 Не получилось", callback_data="reg_failed"))
+    b.row(types.InlineKeyboardButton(text="🔁 Попробую ещё раз", url=REG_LINK))
+    return b.as_markup()
 
 
-async def send_guide(chat_id: int):
-    global _guide_file_id
-    pdf_path = MEDIA_DIR / "guide.pdf"
+# ─── ШАГ 1: /start ──────────────────────────────────────────────────────────
 
-    if _guide_file_id:
-        await bot.send_document(chat_id, _guide_file_id)
-        return
-
-    if pdf_path.exists():
-        msg = await bot.send_document(chat_id, types.FSInputFile(pdf_path))
-        _guide_file_id = msg.document.file_id  # кешируем на будущее
-    else:
-        # Гайда ещё нет — шлём текстовую заглушку
-        await bot.send_message(
-            chat_id,
-            "📖 <b>Гайд «5 средств Faberlic, которые заменят 15 банок из магазина»</b>\n\n"
-            "Гульчачак пришлёт его тебе лично в ближайшее время 🌸"
-        )
-
-
-# ───────────────────────────────────────────
-#  ШАГ 1: /start — крючок
-# ───────────────────────────────────────────
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
@@ -159,89 +129,92 @@ async def cmd_start(message: types.Message, state: FSMContext):
     bot_db.update_stage(message.from_user.id, "started")
     bot_db.log_event(message.from_user.id, "start", source)
 
-    # Фото или видео-кружок Гульчачак
+    # Видео-кружок или фото Гульчачак
     if not await send_video_note_if_exists(message.chat.id, "gulchachak_intro.mp4"):
-        await send_photo_if_exists(
+        sent = await send_photo_if_exists(
             message.chat.id, "gulchachak.jpg",
-            caption="Привет, я <b>Гульчачак</b> 🌸"
+            caption=(
+                "Привет, я <b>Гульчачак</b> 🌸\n\n"
+                "<i>[🎥 Здесь будет короткое видео-знакомство — "
+                "15 секунд, кто я и чем помогу тебе сэкономить]</i>"
+            )
         )
+        if not sent:
+            await message.answer(
+                "Привет, я помощник <b>Гульчачак</b> 🌸\n\n"
+                "<i>[🎥 Здесь будет видео-знакомство от Гульчачак]</i>"
+            )
 
     await typing(message.chat.id, 2.0)
 
     b = InlineKeyboardBuilder()
-    b.row(types.InlineKeyboardButton(text="Да, хочу знать как →", callback_data="hook_yes"))
-    b.row(types.InlineKeyboardButton(text="Не верю, это развод", callback_data="hook_doubt"))
+    b.row(types.InlineKeyboardButton(text="Да, интересно →", callback_data="hook_yes"))
+    b.row(types.InlineKeyboardButton(text="Не верю, это развод 🤔", callback_data="hook_doubt"))
 
     await message.answer(
-        "Ты покупаешь порошок, гель для душа, косметику на Wildberries или в магазине?\n\n"
+        "Ты покупаешь порошок, гель для душа и косметику на Wildberries?\n\n"
         "А знаешь, что <b>те же самые вещи</b> можно брать на <b>20–26% дешевле</b> — "
-        "напрямую от производителя, без подписок и обязательных закупок?\n\n"
-        "Давай посчитаем сколько ты переплачиваешь прямо сейчас 👇",
+        "напрямую от производителя, без обязательных закупок и подписок?\n\n"
+        "Давай посчитаем — сколько ты сейчас переплачиваешь 👇",
         reply_markup=b.as_markup()
     )
 
 
-# ───────────────────────────────────────────
-#  Обработка сомнения
-# ───────────────────────────────────────────
+# ─── СОМНЕНИЕ ────────────────────────────────────────────────────────────────
+
 @dp.callback_query(F.data == "hook_doubt")
-async def hook_doubt(cb: types.CallbackQuery, state: FSMContext):
+async def hook_doubt(cb: types.CallbackQuery):
     await cb.answer()
     try:
         await cb.message.delete()
     except Exception:
         pass
-
     await typing(cb.message.chat.id, 1.5)
+
     b = InlineKeyboardBuilder()
     b.row(types.InlineKeyboardButton(text="Ладно, давай посчитаем →", callback_data="hook_yes"))
     b.row(types.InlineKeyboardButton(text="Всё равно не интересно", callback_data="not_now"))
 
     await bot.send_message(
         cb.message.chat.id,
-        "Понимаю скептицизм 🙂\n\n"
-        "Faberlic — это российская компания, работает с 1997 года. "
+        "Понимаю скептицизм — в интернете много всякого 🙂\n\n"
+        "<b>Faberlic</b> — российская компания, работает с 1997 года. "
         "Производит бытовую химию, косметику, парфюм. "
-        "Никаких схем — просто покупаешь напрямую как зарегистрированный покупатель "
-        "и получаешь скидку постоянного клиента.\n\n"
-        "Давай просто посчитаем на твоих цифрах — убедишься сама 👇",
+        "Никаких схем — просто регистрируешься как постоянный покупатель "
+        "и получаешь скидку навсегда.\n\n"
+        "Давай просто посчитаем на твоих цифрах 👇",
         reply_markup=b.as_markup()
     )
 
 
-# ───────────────────────────────────────────
-#  ШАГ 2: Квиз — сколько тратишь
-# ───────────────────────────────────────────
+# ─── ШАГ 2: КВИЗ ─────────────────────────────────────────────────────────────
+
 @dp.callback_query(F.data == "hook_yes")
 async def quiz_spend(cb: types.CallbackQuery, state: FSMContext):
     await cb.answer()
     bot_db.update_stage(cb.from_user.id, "quiz_started")
-    bot_db.log_event(cb.from_user.id, "hook_yes")
-
     try:
         await cb.message.delete()
     except Exception:
         pass
-
     await typing(cb.message.chat.id, 1.2)
 
     b = InlineKeyboardBuilder()
     b.row(types.InlineKeyboardButton(text="до 2 000 ₽", callback_data="spend_low"))
-    b.row(types.InlineKeyboardButton(text="2 000–5 000 ₽", callback_data="spend_mid"))
+    b.row(types.InlineKeyboardButton(text="2 000 – 5 000 ₽", callback_data="spend_mid"))
     b.row(types.InlineKeyboardButton(text="больше 5 000 ₽", callback_data="spend_high"))
 
     await bot.send_message(
         cb.message.chat.id,
         "Сколько примерно тратишь в месяц на <b>бытовую химию и косметику</b>?\n\n"
-        "<i>(порошок, средство для посуды, гель для душа, шампунь, крем — всё вместе)</i>",
+        "<i>Порошок, гель для душа, шампунь, крем, средство для посуды — всё вместе</i>",
         reply_markup=b.as_markup()
     )
     await state.set_state(Form.quiz_spend)
 
 
-# ───────────────────────────────────────────
-#  ШАГ 3: Персональный результат
-# ───────────────────────────────────────────
+# ─── ШАГ 3: РЕЗУЛЬТАТ + РЕГИСТРАЦИЯ ─────────────────────────────────────────
+
 @dp.callback_query(Form.quiz_spend, F.data.startswith("spend_"))
 async def quiz_result(cb: types.CallbackQuery, state: FSMContext):
     await cb.answer()
@@ -257,137 +230,88 @@ async def quiz_result(cb: types.CallbackQuery, state: FSMContext):
         pass
 
     await typing(cb.message.chat.id, 2.0)
-
     await bot.send_message(
         cb.message.chat.id,
         f"<b>Твоя экономия с Faberlic:</b>\n\n"
         f"💰 <b>~{save_month:,} ₽ в месяц</b>\n"
         f"🎯 <b>~{save_year:,} ₽ в год</b>\n\n"
-        f"Живыми деньгами — на те же самые покупки."
+        f"Живыми деньгами — на те же самые покупки, что ты и так берёшь."
     )
 
     await typing(cb.message.chat.id, 2.0)
-
-    # Force-subscribe: предлагаем канал + гайд
-    if CHANNEL_ID and CHANNEL_LINK:
-        b = InlineKeyboardBuilder()
-        b.row(types.InlineKeyboardButton(text="🔗 Подписаться на канал", url=CHANNEL_LINK))
-        b.row(types.InlineKeyboardButton(text="✅ Я подписалась!", callback_data="check_sub"))
-        await bot.send_message(
-            cb.message.chat.id,
-            f"🎁 Чтобы забрать пошаговую инструкцию как оформить дисконт 20% "
-            f"и получить мой авторский гайд <b>«5 средств Faberlic, которые заменят "
-            f"15 банок из магазина»</b> — подпишись на мой закрытый канал для мам 👇",
-            reply_markup=b.as_markup()
-        )
-    else:
-        # Канал не настроен — идём сразу к сбору контакта
-        b = InlineKeyboardBuilder()
-        b.row(types.InlineKeyboardButton(text="✅ Хочу так же", callback_data="lead"))
-        b.row(types.InlineKeyboardButton(text="📸 Покажи отзывы", callback_data="proof"))
-        b.row(types.InlineKeyboardButton(text="⏸ Не сейчас", callback_data="not_now"))
-        await bot.send_message(
-            cb.message.chat.id,
-            "❌ <i>«А вдруг заставят покупать каждый месяц на большие суммы?»</i>\n"
-            "✅ Нет. Никаких обязаловок. Покупаешь только то, что нужно — когда хочешь.\n\n"
-            "Гульчачак <b>бесплатно</b> оформит тебе личный кабинет и поможет взять "
-            "максимум бонусов с первого заказа 🌸",
-            reply_markup=b.as_markup()
-        )
-
-
-# ───────────────────────────────────────────
-#  Проверка подписки на канал
-# ───────────────────────────────────────────
-@dp.callback_query(F.data == "check_sub")
-async def check_sub(cb: types.CallbackQuery, state: FSMContext):
-    await cb.answer()
-    subscribed = await is_subscribed(cb.from_user.id)
-
-    if not subscribed:
-        await cb.answer(
-            "Вижу, что ты ещё не подписалась 😔\n"
-            "Нажми первую кнопку, подпишись и возвращайся!",
-            show_alert=True
-        )
-        return
-
-    bot_db.log_event(cb.from_user.id, "subscribed_channel")
-    try:
-        await cb.message.delete()
-    except Exception:
-        pass
-
-    await typing(cb.message.chat.id, 1.0)
     await bot.send_message(
         cb.message.chat.id,
-        "🎉 Отлично, ты в канале! Держи гайд 👇"
+        "❌ <i>«А вдруг заставят покупать каждый месяц на большие суммы?»</i>\n"
+        "✅ Нет. Покупаешь только то, что нужно — когда хочешь. "
+        "Никаких обязательных заказов.\n\n"
+        "❌ <i>«Регистрация платная?»</i>\n"
+        "✅ Нет. Абсолютно бесплатно.\n\n"
+        "❌ <i>«Это МЛМ? Надо кого-то приглашать?»</i>\n"
+        "✅ Нет. Просто программа лояльности — как карта постоянного покупателя, "
+        "только со скидкой 20–26% вместо 5%."
     )
-    await send_guide(cb.message.chat.id)
+
+    await typing(cb.message.chat.id, 2.0)
+    bot_db.update_stage(cb.from_user.id, "showed_link")
+    bot_db.mark_link_shown(cb.from_user.id)
+
+    await bot.send_message(
+        cb.message.chat.id,
+        f"Регистрация занимает <b>2 минуты</b> 🌸\n\n"
+        f"Нажми кнопку ниже — откроется сайт Faberlic. "
+        f"Заполни имя, email и телефон. Готово — скидка активна сразу.",
+        reply_markup=reg_kb()
+    )
+
+
+# ─── FAQ — ЧАСТЫЕ ВОПРОСЫ ────────────────────────────────────────────────────
+
+@dp.callback_query(F.data == "faq")
+async def faq(cb: types.CallbackQuery):
+    await cb.answer()
+    bot_db.log_event(cb.from_user.id, "faq")
 
     await typing(cb.message.chat.id, 1.5)
-    b = InlineKeyboardBuilder()
-    b.row(types.InlineKeyboardButton(text="✅ Хочу оформить дисконт", callback_data="lead"))
-    b.row(types.InlineKeyboardButton(text="📸 Покажи отзывы", callback_data="proof"))
-    b.row(types.InlineKeyboardButton(text="⏸ Не сейчас", callback_data="not_now"))
     await bot.send_message(
         cb.message.chat.id,
-        "❌ <i>«А вдруг заставят покупать каждый месяц?»</i>\n"
-        "✅ Нет. Покупаешь только то, что нужно — когда хочешь.\n\n"
-        "Гульчачак <b>бесплатно</b> оформит твой кабинет и поможет взять "
-        "максимум бонусов с первого заказа 🌸",
-        reply_markup=b.as_markup()
+        "<b>Отвечаю на самые частые вопросы 🌸</b>\n\n"
+
+        "🔹 <b>Сколько стоит регистрация?</b>\n"
+        "Ничего. Бесплатно.\n\n"
+
+        "🔹 <b>Нужно ли делать заказы каждый месяц?</b>\n"
+        "Нет. Заказываешь когда хочешь и что хочешь. "
+        "Хоть раз в полгода — скидка остаётся.\n\n"
+
+        "🔹 <b>Будут ли мне звонить или спамить?</b>\n"
+        "Нет. Только если сама обратишься за помощью к Гульчачак.\n\n"
+
+        "🔹 <b>Это МЛМ? Надо кого-то приглашать?</b>\n"
+        "Нет. Ты просто покупаешь для себя дешевле. "
+        "Никого приглашать не нужно.\n\n"
+
+        "🔹 <b>Как получить скидку 20–26%?</b>\n"
+        "Автоматически после регистрации. "
+        "Скидка применяется ко всему каталогу сразу.\n\n"
+
+        "🔹 <b>Как зарегистрироваться?</b>\n"
+        "1️⃣ Нажми кнопку «Зарегистрироваться»\n"
+        "2️⃣ Введи имя, фамилию, email и телефон\n"
+        "3️⃣ Придумай пароль\n"
+        "4️⃣ Подтверди email (письмо придёт сразу)\n"
+        "5️⃣ Всё — личный кабинет готов, скидка активна 🎉\n\n"
+        "<i>Если всё равно что-то непонятно — Гульчачак поможет лично.</i>",
+        reply_markup=reg_kb()
     )
 
 
-# ───────────────────────────────────────────
-#  Соц-доказательство
-# ───────────────────────────────────────────
-@dp.callback_query(F.data == "proof")
-async def proof(cb: types.CallbackQuery):
+# ─── НУЖНА ПОМОЩЬ → СБОР КОНТАКТА ───────────────────────────────────────────
+
+@dp.callback_query(F.data.in_({"need_help", "reg_failed"}))
+async def need_help(cb: types.CallbackQuery, state: FSMContext):
     await cb.answer()
-    bot_db.log_event(cb.from_user.id, "view_proof")
-
-    sent = False
-    for fname, caption in [
-        ("review_1.jpg", "💬 Отзыв покупательницы"),
-        ("review_2.jpg", "💬 Ещё один отзыв"),
-        ("payout.jpg",   "💰 Скрин экономии за месяц"),
-    ]:
-        if await send_photo_if_exists(cb.message.chat.id, fname, caption):
-            sent = True
-            await asyncio.sleep(1)
-
-    if not sent:
-        await typing(cb.message.chat.id, 1.0)
-        await bot.send_message(
-            cb.message.chat.id,
-            "📸 Отзывы и скрины скоро появятся тут.\n"
-            "Гульчачак пришлёт их лично — как только оставишь контакт 👇"
-        )
-
-    b = InlineKeyboardBuilder()
-    b.row(types.InlineKeyboardButton(text="✅ Хочу попробовать", callback_data="lead"))
-    b.row(types.InlineKeyboardButton(text="⏸ Не сейчас", callback_data="not_now"))
-    await bot.send_message(cb.message.chat.id, "Попробуем? 👇", reply_markup=b.as_markup())
-
-
-# ───────────────────────────────────────────
-#  ШАГ 4: Сбор контакта
-# ───────────────────────────────────────────
-@dp.callback_query(F.data == "lead")
-async def lead_start(cb: types.CallbackQuery, state: FSMContext):
-    await cb.answer()
-    data = await state.get_data()
-
-    # Если квиз не прошли (старая кнопка после рестарта)
-    if not data.get("spend_tier"):
-        await bot.send_message(cb.message.chat.id, "Давай сначала 🌸 жми /start")
-        return
-
     bot_db.update_stage(cb.from_user.id, "asked_name")
-    bot_db.log_event(cb.from_user.id, "lead_clicked")
-
+    bot_db.log_event(cb.from_user.id, "need_help")
     try:
         await cb.message.delete()
     except Exception:
@@ -396,7 +320,8 @@ async def lead_start(cb: types.CallbackQuery, state: FSMContext):
     await typing(cb.message.chat.id, 1.0)
     await bot.send_message(
         cb.message.chat.id,
-        "Отлично! Осталось два шага 🌸\n\nКак тебя зовут?"
+        "Без проблем, Гульчачак поможет 🌸\n\n"
+        "Как тебя зовут?"
     )
     await state.set_state(Form.waiting_for_name)
 
@@ -405,7 +330,7 @@ async def lead_start(cb: types.CallbackQuery, state: FSMContext):
 async def process_name(message: types.Message, state: FSMContext):
     name = (message.text or "").strip()[:80]
     if len(re.findall(r"[а-яёa-z]", name.lower())) < 2:
-        await message.answer("Напиши имя, пожалуйста 🙂")
+        await message.answer("Напиши своё имя 🙂")
         return
 
     await state.update_data(user_name=name)
@@ -418,8 +343,8 @@ async def process_name(message: types.Message, state: FSMContext):
     await typing(message.chat.id, 1.0)
     await message.answer(
         f"Приятно познакомиться, {escape(name)} 🌸\n\n"
-        f"Последний шаг — оставь номер телефона.\n"
-        f"Гульчачак напишет в течение пары часов и поможет оформить кабинет.",
+        f"Оставь номер телефона — Гульчачак напишет "
+        f"в течение пары часов и поможет разобраться.",
         reply_markup=kb.as_markup(resize_keyboard=True, one_time_keyboard=True),
     )
     await state.set_state(Form.waiting_for_phone)
@@ -446,25 +371,23 @@ async def process_phone(message: types.Message, state: FSMContext):
     name = data.get("user_name", "—")
     source = data.get("source", "direct")
     tier = data.get("spend_tier", "—")
-    save_month = data.get("save_month", 0)
     save_year = data.get("save_year", 0)
     user = message.from_user
 
     bot_db.update_stage(user.id, "completed", phone=phone, completed_at=bot_db.now())
     bot_db.log_event(user.id, "phone_given", phone)
-    linked.record_bot_completion(user.id, source, name, phone, "🎁 Скидка")
+    linked.record_bot_completion(user.id, source, name, phone, "🆘 Нужна помощь")
 
     profile = f"@{user.username}" if user.username else f'<a href="tg://user?id={user.id}">профиль</a>'
-
     spend_label = {"low": "до 2 000 ₽", "mid": "2 000–5 000 ₽", "high": "более 5 000 ₽"}.get(tier, tier)
 
     report = (
-        f"🔥 <b>НОВАЯ ЗАЯВКА</b>\n"
+        f"🆘 <b>НУЖНА ПОМОЩЬ С РЕГИСТРАЦИЕЙ</b>\n"
         f"━━━━━━━━━━━━\n"
         f"👤 Имя: {escape(name)}\n"
         f"📱 Тел: <code>{escape(phone)}</code>\n"
         f"🛒 Трат в мес: {spend_label}\n"
-        f"💰 Экономия: ~{save_month:,} ₽/мес  (~{save_year:,} ₽/год)\n"
+        f"💰 Экономия: ~{save_year:,} ₽/год\n"
         f"🚩 Источник: {label_source(source)}\n"
         f"🔗 Профиль: {profile}\n"
         f"━━━━━━━━━━━━"
@@ -475,33 +398,62 @@ async def process_phone(message: types.Message, state: FSMContext):
         except Exception as e:
             log.error(f"admin {admin}: {e}")
 
-    # ───── Финальный экран ─────
     await message.answer(
-        f"🎉 <b>Готово, {escape(name)}!</b>",
+        f"Готово, {escape(name)}! 🌸",
         reply_markup=types.ReplyKeyboardRemove(),
     )
-    await typing(message.chat.id, 2.0)
-    await message.answer(
-        f"Твоя потенциальная экономия — <b>~{save_year:,} ₽ в год</b> 🌸\n\n"
-        "<b>Что дальше:</b>\n"
-        "1️⃣ Гульчачак напишет тебе в течение <b>1–2 часов</b>\n"
-        "2️⃣ Бесплатно оформит личный кабинет\n"
-        "3️⃣ Подскажет как взять максимум бонусов с первого заказа\n\n"
-        "<i>Никаких звонков. Если не подойдёт — просто скажешь, без обид.</i>"
-    )
     await typing(message.chat.id, 1.5)
-    b = InlineKeyboardBuilder()
-    b.row(types.InlineKeyboardButton(text="👩‍💻 Написать Гульчачак сейчас", url=GULCHACHAK_LINK))
     await message.answer(
-        "Если не хочешь ждать — можешь написать ей первой 👇",
-        reply_markup=b.as_markup()
+        "Гульчачак получила твой контакт и напишет в течение <b>1–2 часов</b>.\n\n"
+        "Она поможет зарегистрироваться за 5 минут — "
+        "прямо в переписке, без звонков 🌸"
     )
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="👩‍💻 Написать ей сейчас", url=GULCHACHAK_LINK))
+    await message.answer("Или сама напиши ей прямо сейчас 👇", reply_markup=b.as_markup())
     await state.clear()
 
 
-# ───────────────────────────────────────────
-#  Не сейчас
-# ───────────────────────────────────────────
+# ─── РЕГИСТРАЦИЯ ВЫПОЛНЕНА ────────────────────────────────────────────────────
+
+@dp.callback_query(F.data == "reg_done")
+async def reg_done(cb: types.CallbackQuery):
+    await cb.answer()
+    bot_db.update_stage(cb.from_user.id, "registered")
+    bot_db.log_event(cb.from_user.id, "reg_done")
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+
+    await typing(cb.message.chat.id, 1.5)
+    data = bot_db.get_user(cb.from_user.id)
+    save_year = 0
+    if data:
+        tier = data.get("spend_tier")
+        if tier and tier in SPEND_SAVING:
+            save_year = SPEND_SAVING[tier][2]
+
+    await bot.send_message(
+        cb.message.chat.id,
+        f"🎉 <b>Поздравляю!</b>\n\n"
+        f"Теперь ты экономишь <b>~{save_year:,} ₽ в год</b> на тех же покупках 🌸\n\n"
+        f"Можешь сразу зайти в каталог и сделать первый заказ со скидкой.\n\n"
+        f"Если вдруг возникнут вопросы — Гульчачак всегда на связи:",
+    )
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="👩‍💻 Написать Гульчачак", url=GULCHACHAK_LINK))
+    if CHANNEL_LINK:
+        b.row(types.InlineKeyboardButton(text="📣 Подписаться на канал", url=CHANNEL_LINK))
+    await bot.send_message(
+        cb.message.chat.id,
+        "Ещё в её канале — лайфхаки по экономии и обзоры новинок 🌸" if CHANNEL_LINK else "На связи! 🌸",
+        reply_markup=b.as_markup()
+    )
+
+
+# ─── НЕ СЕЙЧАС ───────────────────────────────────────────────────────────────
+
 @dp.callback_query(F.data == "not_now")
 async def not_now(cb: types.CallbackQuery, state: FSMContext):
     await cb.answer("ок, без давления 🌸")
@@ -519,22 +471,24 @@ async def not_now(cb: types.CallbackQuery, state: FSMContext):
     )
 
 
-# ───────────────────────────────────────────
-#  /help
-# ───────────────────────────────────────────
+# ─── /help ───────────────────────────────────────────────────────────────────
+
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="✅ Зарегистрироваться", url=REG_LINK))
+    b.row(types.InlineKeyboardButton(text="👩‍💻 Написать Гульчачак", url=GULCHACHAK_LINK))
     await message.answer(
-        "🌸 <b>Как пользоваться ботом</b>\n\n"
+        "🌸 <b>Чем могу помочь</b>\n\n"
         "/start — начать сначала\n"
         "/help — это сообщение\n\n"
-        f"Вопросы? Пиши напрямую: {GULCHACHAK_LINK}"
+        "Или выбери кнопку 👇",
+        reply_markup=b.as_markup()
     )
 
 
-# ───────────────────────────────────────────
-#  Fallback
-# ───────────────────────────────────────────
+# ─── FALLBACK ────────────────────────────────────────────────────────────────
+
 @dp.message(F.text)
 async def fallback(message: types.Message, state: FSMContext):
     bot_db.log_event(message.from_user.id, "freeform", (message.text or "")[:200])
@@ -543,23 +497,26 @@ async def fallback(message: types.Message, state: FSMContext):
         await message.answer("Нажми кнопку выше или /start чтобы начать сначала 🌸")
         return
     await typing(message.chat.id, 1.0)
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="✅ Зарегистрироваться", url=REG_LINK))
+    b.row(types.InlineKeyboardButton(text="👩‍💻 Написать Гульчачак", url=GULCHACHAK_LINK))
     await message.answer(
         "Я бот-помощник Гульчачак 🌸\n\n"
         "Жми /start — посчитаем сколько ты сможешь экономить.\n"
-        f"Или сразу пиши ей: {GULCHACHAK_LINK}"
+        "Или сразу выбери 👇",
+        reply_markup=b.as_markup()
     )
 
 
-# ───────────────────────────────────────────
-#  Админка
-# ───────────────────────────────────────────
+# ─── АДМИНКА ─────────────────────────────────────────────────────────────────
+
 @dp.message(Command("stats"))
 async def cmd_stats(message: types.Message):
     if message.from_user.id not in ADMIN_IDS:
         return
     s = bot_db.funnel_stats()
     lines = ["<b>📊 ВОРОНКА</b>\n"]
-    order = ["started", "quiz_started", "asked_name", "asked_phone", "completed", "postponed"]
+    order = ["started", "quiz_started", "showed_link", "registered", "asked_name", "asked_phone", "completed", "postponed"]
     by = {r["funnel_stage"]: r["n"] for r in s["stages"]}
     total = by.get("started", 1) or 1
     for st in order:
@@ -582,33 +539,69 @@ async def cmd_reset(message: types.Message, state: FSMContext):
     await message.answer("✅ стейт сброшен, жми /start")
 
 
-# ───────────────────────────────────────────
-#  Reminder loop
-# ───────────────────────────────────────────
+# ─── НАПОМИНАНИЯ (ДОЖИМ) ──────────────────────────────────────────────────────
+
 async def reminder_loop():
-    await asyncio.sleep(60)
+    await asyncio.sleep(90)
     while True:
         try:
-            stuck = bot_db.pending_reminders(stuck_minutes=30)
-            for u in stuck:
-                name = u.get("name") or u.get("first_name") or "ты"
+            # Напоминание 1 — через 10 минут после показа ссылки
+            for u in bot_db.pending_reminder1(minutes=10):
+                name = u.get("first_name") or "привет"
+                tier = u.get("spend_tier")
+                save_year = SPEND_SAVING.get(tier, (0, 0, 0))[2] if tier else 0
                 try:
                     await bot.send_message(
                         u["tg_id"],
-                        f"{escape(name)}, отвлеклась? 🌸\n"
-                        f"Мы почти посчитали твою экономию — вернись: /start 👈"
+                        f"{escape(name)}, ты успела зарегистрироваться? 🌸\n\n"
+                        f"Напоминаю — твоя экономия <b>~{save_year:,} ₽ в год</b> "
+                        f"ждёт тебя, регистрация занимает 2 минуты 👇",
+                        reply_markup=after_reg_kb()
                     )
-                    bot_db.log_event(u["tg_id"], "reminder_sent")
+                    bot_db.mark_reminder1_sent(u["tg_id"])
+                    bot_db.log_event(u["tg_id"], "reminder1_sent")
                 except TelegramForbiddenError:
                     bot_db.log_event(u["tg_id"], "blocked_bot")
+                    bot_db.mark_reminder1_sent(u["tg_id"])
                 except Exception as e:
-                    log.warning(f"reminder fail {u['tg_id']}: {e}")
-                bot_db.mark_reminder_sent(u["tg_id"])
+                    log.warning(f"reminder1 {u['tg_id']}: {e}")
                 await asyncio.sleep(2)
+
+            # Напоминание 2 (дожим) — через 40 минут после reminder1
+            for u in bot_db.pending_reminder2(minutes=40):
+                name = u.get("first_name") or "привет"
+                tier = u.get("spend_tier")
+                save_year = SPEND_SAVING.get(tier, (0, 0, 0))[2] if tier else 0
+                try:
+                    b = InlineKeyboardBuilder()
+                    b.row(types.InlineKeyboardButton(text="✅ Зарегистрироваться", url=REG_LINK))
+                    b.row(types.InlineKeyboardButton(text="❓ Как зарегистрироваться?", callback_data="faq"))
+                    b.row(types.InlineKeyboardButton(text="🙋 Помогите, не получается", callback_data="need_help"))
+                    await bot.send_message(
+                        u["tg_id"],
+                        f"{escape(name)}, последний раз напомню 🌸\n\n"
+                        f"Ты оставляешь <b>~{save_year:,} ₽ в год</b> на столе — "
+                        f"просто потому что ещё не зарегистрировалась.\n\n"
+                        f"Это бесплатно и занимает 2 минуты. "
+                        f"Если что-то не получается — нажми кнопку ниже, "
+                        f"Гульчачак поможет лично 🌸",
+                        reply_markup=b.as_markup()
+                    )
+                    bot_db.mark_reminder2_sent(u["tg_id"])
+                    bot_db.log_event(u["tg_id"], "reminder2_sent")
+                except TelegramForbiddenError:
+                    bot_db.log_event(u["tg_id"], "blocked_bot")
+                    bot_db.mark_reminder2_sent(u["tg_id"])
+                except Exception as e:
+                    log.warning(f"reminder2 {u['tg_id']}: {e}")
+                await asyncio.sleep(2)
+
         except Exception as e:
             log.exception(f"reminder loop: {e}")
-        await asyncio.sleep(300)
+        await asyncio.sleep(120)
 
+
+# ─── MAIN ─────────────────────────────────────────────────────────────────────
 
 async def main():
     bot_db.init()

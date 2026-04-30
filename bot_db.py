@@ -17,8 +17,10 @@ CREATE TABLE IF NOT EXISTS users (
     name TEXT,
     phone TEXT,
     spend_tier TEXT,
-    completed_at TEXT,
-    reminder_sent INTEGER NOT NULL DEFAULT 0
+    link_shown_at TEXT,
+    reminder1_sent INTEGER NOT NULL DEFAULT 0,
+    reminder2_sent INTEGER NOT NULL DEFAULT 0,
+    completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_users_stage ON users(funnel_stage);
 CREATE INDEX IF NOT EXISTS idx_users_source ON users(source);
@@ -33,6 +35,13 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_tg ON events(tg_id);
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 """
+
+MIGRATIONS = [
+    "ALTER TABLE users ADD COLUMN spend_tier TEXT",
+    "ALTER TABLE users ADD COLUMN link_shown_at TEXT",
+    "ALTER TABLE users ADD COLUMN reminder1_sent INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN reminder2_sent INTEGER NOT NULL DEFAULT 0",
+]
 
 
 def now():
@@ -53,10 +62,13 @@ def conn():
 def init():
     with conn() as c:
         c.executescript(SCHEMA)
-        try:
-            c.execute("ALTER TABLE users ADD COLUMN spend_tier TEXT")
-        except Exception:
-            pass  # колонка уже существует
+    # безопасные миграции для существующих БД
+    with conn() as c:
+        for sql in MIGRATIONS:
+            try:
+                c.execute(sql)
+            except Exception:
+                pass
 
 
 def upsert_user(tg_id, username, first_name, source):
@@ -98,27 +110,62 @@ def get_user(tg_id):
         return dict(r) if r else None
 
 
-def pending_reminders(stuck_minutes=30):
-    cutoff = (datetime.now(timezone.utc).timestamp() - stuck_minutes * 60)
+def mark_link_shown(tg_id):
+    with conn() as c:
+        c.execute(
+            "UPDATE users SET link_shown_at=?, reminder1_sent=0, reminder2_sent=0 WHERE tg_id=?",
+            (now(), tg_id)
+        )
+
+
+def mark_reminder1_sent(tg_id):
+    with conn() as c:
+        c.execute("UPDATE users SET reminder1_sent=1 WHERE tg_id=?", (tg_id,))
+
+
+def mark_reminder2_sent(tg_id):
+    with conn() as c:
+        c.execute("UPDATE users SET reminder2_sent=1 WHERE tg_id=?", (tg_id,))
+
+
+def pending_reminder1(minutes=10):
+    """Пользователи кому показали ссылку X минут назад, reminder1 ещё не отправлен."""
     with conn() as c:
         rows = c.execute(
-            "SELECT * FROM users WHERE reminder_sent=0 AND completed_at IS NULL "
-            "AND funnel_stage IN ('quiz_started', 'asked_name', 'asked_phone')"
+            "SELECT * FROM users WHERE link_shown_at IS NOT NULL "
+            "AND reminder1_sent=0 "
+            "AND funnel_stage='showed_link'"
         ).fetchall()
         result = []
+        cutoff = datetime.now(timezone.utc).timestamp() - minutes * 60
         for r in rows:
             try:
-                last = datetime.fromisoformat(r["last_seen"]).timestamp()
-                if last < cutoff:
+                shown = datetime.fromisoformat(r["link_shown_at"]).timestamp()
+                if shown < cutoff:
                     result.append(dict(r))
             except Exception:
                 pass
         return result
 
 
-def mark_reminder_sent(tg_id):
+def pending_reminder2(minutes=40):
+    """Пользователи кому отправили reminder1, но они не зарегистрировались."""
     with conn() as c:
-        c.execute("UPDATE users SET reminder_sent=1 WHERE tg_id=?", (tg_id,))
+        rows = c.execute(
+            "SELECT * FROM users WHERE reminder1_sent=1 "
+            "AND reminder2_sent=0 "
+            "AND funnel_stage='showed_link'"
+        ).fetchall()
+        result = []
+        cutoff = datetime.now(timezone.utc).timestamp() - minutes * 60
+        for r in rows:
+            try:
+                shown = datetime.fromisoformat(r["link_shown_at"]).timestamp()
+                if shown < cutoff:
+                    result.append(dict(r))
+            except Exception:
+                pass
+        return result
 
 
 def funnel_stats():
@@ -127,7 +174,9 @@ def funnel_stats():
             "SELECT funnel_stage, COUNT(*) n FROM users GROUP BY funnel_stage"
         ).fetchall()
         sources = c.execute(
-            "SELECT source, COUNT(*) total, SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) completed "
+            "SELECT source, COUNT(*) total, "
+            "SUM(CASE WHEN funnel_stage='registered' THEN 1 ELSE 0 END) registered, "
+            "SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) completed "
             "FROM users GROUP BY source ORDER BY total DESC"
         ).fetchall()
         return {
