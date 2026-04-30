@@ -183,3 +183,18 @@ def funnel_stats():
             "stages": [dict(r) for r in stages],
             "sources": [dict(r) for r in sources],
         }
+
+
+def get_all_tg_ids():
+    with conn() as c:
+        rows = c.execute("SELECT tg_id FROM users").fetchall()
+        return [r["tg_id"] for r in rows]
+
+
+def get_recent_leads(limit=10):
+    with conn() as c:
+        rows = c.execute(
+            "SELECT * FROM users WHERE funnel_stage IN ('completed','asked_phone','asked_name') "
+            "ORDER BY last_seen DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
