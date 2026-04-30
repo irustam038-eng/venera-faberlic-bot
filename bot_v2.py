@@ -752,7 +752,7 @@ async def cmd_help(message: types.Message):
 
 # ─── FALLBACK ────────────────────────────────────────────────────────────────
 
-@dp.message(F.text)
+@dp.message(F.text & ~F.text.startswith("/"))
 async def fallback(message: types.Message, state: FSMContext):
     bot_db.log_event(message.from_user.id, "freeform", (message.text or "")[:200])
     current = await state.get_state()
