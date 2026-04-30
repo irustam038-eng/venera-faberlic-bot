@@ -28,8 +28,13 @@ log = logging.getLogger("bot")
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()]
 GULCHACHAK_LINK = os.getenv("GULCHACHAK_LINK", "https://t.me/Gulchachak_faberlic")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "")          # например @gulchachak_club или -1001234567890
+CHANNEL_LINK = os.getenv("CHANNEL_LINK", "")      # публичная ссылка на канал
 MEDIA_DIR = Path(__file__).parent / "media"
 MEDIA_DIR.mkdir(exist_ok=True)
+
+# file_id PDF-гайда — кешируется после первой отправки
+_guide_file_id: str | None = None
 
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
@@ -102,6 +107,37 @@ async def send_voice_if_exists(chat_id, filename):
     except Exception as e:
         log.warning(f"voice {filename}: {e}")
         return False
+
+
+async def is_subscribed(user_id: int) -> bool:
+    if not CHANNEL_ID:
+        return True  # канал не настроен — пропускаем проверку
+    try:
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status not in ("left", "kicked")
+    except Exception as e:
+        log.warning(f"check subscription {user_id}: {e}")
+        return False
+
+
+async def send_guide(chat_id: int):
+    global _guide_file_id
+    pdf_path = MEDIA_DIR / "guide.pdf"
+
+    if _guide_file_id:
+        await bot.send_document(chat_id, _guide_file_id)
+        return
+
+    if pdf_path.exists():
+        msg = await bot.send_document(chat_id, types.FSInputFile(pdf_path))
+        _guide_file_id = msg.document.file_id  # кешируем на будущее
+    else:
+        # Гайда ещё нет — шлём текстовую заглушку
+        await bot.send_message(
+            chat_id,
+            "📖 <b>Гайд «5 средств Faberlic, которые заменят 15 банок из магазина»</b>\n\n"
+            "Гульчачак пришлёт его тебе лично в ближайшее время 🌸"
+        )
 
 
 # ───────────────────────────────────────────
@@ -230,18 +266,75 @@ async def quiz_result(cb: types.CallbackQuery, state: FSMContext):
         f"Живыми деньгами — на те же самые покупки."
     )
 
-    await typing(cb.message.chat.id, 2.5)
+    await typing(cb.message.chat.id, 2.0)
 
-    b = InlineKeyboardBuilder()
-    b.row(types.InlineKeyboardButton(text="✅ Хочу так же", callback_data="lead"))
-    b.row(types.InlineKeyboardButton(text="📸 Покажи отзывы", callback_data="proof"))
-    b.row(types.InlineKeyboardButton(text="⏸ Не сейчас", callback_data="not_now"))
+    # Force-subscribe: предлагаем канал + гайд
+    if CHANNEL_ID and CHANNEL_LINK:
+        b = InlineKeyboardBuilder()
+        b.row(types.InlineKeyboardButton(text="🔗 Подписаться на канал", url=CHANNEL_LINK))
+        b.row(types.InlineKeyboardButton(text="✅ Я подписалась!", callback_data="check_sub"))
+        await bot.send_message(
+            cb.message.chat.id,
+            f"🎁 Чтобы забрать пошаговую инструкцию как оформить дисконт 20% "
+            f"и получить мой авторский гайд <b>«5 средств Faberlic, которые заменят "
+            f"15 банок из магазина»</b> — подпишись на мой закрытый канал для мам 👇",
+            reply_markup=b.as_markup()
+        )
+    else:
+        # Канал не настроен — идём сразу к сбору контакта
+        b = InlineKeyboardBuilder()
+        b.row(types.InlineKeyboardButton(text="✅ Хочу так же", callback_data="lead"))
+        b.row(types.InlineKeyboardButton(text="📸 Покажи отзывы", callback_data="proof"))
+        b.row(types.InlineKeyboardButton(text="⏸ Не сейчас", callback_data="not_now"))
+        await bot.send_message(
+            cb.message.chat.id,
+            "❌ <i>«А вдруг заставят покупать каждый месяц на большие суммы?»</i>\n"
+            "✅ Нет. Никаких обязаловок. Покупаешь только то, что нужно — когда хочешь.\n\n"
+            "Гульчачак <b>бесплатно</b> оформит тебе личный кабинет и поможет взять "
+            "максимум бонусов с первого заказа 🌸",
+            reply_markup=b.as_markup()
+        )
 
+
+# ───────────────────────────────────────────
+#  Проверка подписки на канал
+# ───────────────────────────────────────────
+@dp.callback_query(F.data == "check_sub")
+async def check_sub(cb: types.CallbackQuery, state: FSMContext):
+    await cb.answer()
+    subscribed = await is_subscribed(cb.from_user.id)
+
+    if not subscribed:
+        await cb.answer(
+            "Вижу, что ты ещё не подписалась 😔\n"
+            "Нажми первую кнопку, подпишись и возвращайся!",
+            show_alert=True
+        )
+        return
+
+    bot_db.log_event(cb.from_user.id, "subscribed_channel")
+    try:
+        await cb.message.delete()
+    except Exception:
+        pass
+
+    await typing(cb.message.chat.id, 1.0)
     await bot.send_message(
         cb.message.chat.id,
-        "❌ <i>«А вдруг заставят покупать каждый месяц на большие суммы?»</i>\n"
-        "✅ Нет. Никаких обязаловок. Покупаешь только то, что нужно — когда хочешь.\n\n"
-        "Гульчачак <b>бесплатно</b> оформит тебе личный кабинет и поможет взять "
+        "🎉 Отлично, ты в канале! Держи гайд 👇"
+    )
+    await send_guide(cb.message.chat.id)
+
+    await typing(cb.message.chat.id, 1.5)
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="✅ Хочу оформить дисконт", callback_data="lead"))
+    b.row(types.InlineKeyboardButton(text="📸 Покажи отзывы", callback_data="proof"))
+    b.row(types.InlineKeyboardButton(text="⏸ Не сейчас", callback_data="not_now"))
+    await bot.send_message(
+        cb.message.chat.id,
+        "❌ <i>«А вдруг заставят покупать каждый месяц?»</i>\n"
+        "✅ Нет. Покупаешь только то, что нужно — когда хочешь.\n\n"
+        "Гульчачак <b>бесплатно</b> оформит твой кабинет и поможет взять "
         "максимум бонусов с первого заказа 🌸",
         reply_markup=b.as_markup()
     )
