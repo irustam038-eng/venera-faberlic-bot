@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 *.db
-media/
+# media/ — не игнорируем, нужны на сервере
+media/*.mp4
 bot.log
 bot_err.log
