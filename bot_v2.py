@@ -1,9 +1,12 @@
 import asyncio
+import csv
 import json
 import logging
 import os
 import re
 import sys
+import tempfile
+from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
@@ -40,12 +43,27 @@ DEFAULT_LINKS = {
     "catalog_beauty": "https://faberlic.com/ru/ru/catalogs/1094?sponsornumber=742652198",
     "catalog_health": "https://faberlic.com/ru/ru/catalogs/1102?sponsornumber=742652198",
     "catalog_makeup": "https://faberlic.com/ru/ru/catalogs/1102?sponsornumber=742652198",
-    "venera_tg": "https://t.me/Venera25Naz",
-    "vk_group": "https://vk.ru/club235304738",
+    # Эко-дом — категории
+    "cat_laundry":  "https://faberlic.com/ru/ru/category/05.01.03.00.00?sponsornumber=742652198&page=0",
+    "cat_shoes":    "https://faberlic.com/ru/ru/category/05.01.10.00.00?sponsornumber=742652198&page=0",
+    "cat_dishes":   "https://faberlic.com/ru/ru/category/05.01.01.00.00?sponsornumber=742652198&page=0",
+    "cat_bathroom": "https://faberlic.com/ru/ru/category/05.01.04.00.00?sponsornumber=742652198&page=0",
+    "cat_kitchen":  "https://faberlic.com/ru/ru/category/05.01.02.00.00?sponsornumber=742652198&page=0",
+    "cat_surfaces": "https://faberlic.com/ru/ru?sponsornumber=742652198",
+    "cat_aroma":    "https://faberlic.com/ru/ru/category/05.01.06.00.00?sponsornumber=742652198&page=0",
+    # Одежда и аксессуары
+    "cat_tights":    "https://faberlic.com/ru/ru/category/07.02.02.01.01?sponsornumber=742652198&page=0",
+    "cat_underwear": "https://faberlic.com/ru/ru/category/07.02.01.03.00?sponsornumber=742652198&page=0",
+    # Другие категории
+    "cat_kids": "https://faberlic.com/ru/ru/category/22.03.01.00.00?sponsornumber=742652198&page=0",
+    "cat_men":  "https://faberlic.com/ru/ru/category/13.07.02.01.00?sponsornumber=742652198&page=0",
+    # Контакты
+    "venera_tg":  "https://t.me/Venera25Naz",
+    "vk_group":   "https://vk.ru/club235304738",
     "vk_personal": "https://vk.ru/id443815960",
-    "whatsapp": "http://wa.me/79274621686",
-    "instagram": "https://www.instagram.com/gazetdinoas",
-    "maxchat": "https://max.ru/join/0XdCIgBT5PEmHxkZDqzgx-UvkcSQ77ZG3H21IVwn9c8",
+    "whatsapp":   "http://wa.me/79274621686",
+    "instagram":  "https://www.instagram.com/gazetdinoas",
+    "maxchat":    "https://max.ru/join/0XdCIgBT5PEmHxkZDqzgx-UvkcSQ77ZG3H21IVwn9c8",
 }
 
 
@@ -95,6 +113,7 @@ class Admin(StatesGroup):
     awaiting_link_key          = State()
     awaiting_broadcast         = State()
     awaiting_broadcast_confirm = State()
+    awaiting_photo_upload      = State()
 
 
 # ─── BOT & DISPATCHER ────────────────────────────────────────────────────────
@@ -200,6 +219,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
     b = InlineKeyboardBuilder()
     b.row(types.InlineKeyboardButton(text="⭐ Посмотреть хиты каталога", callback_data="hits_catalog"))
     b.row(types.InlineKeyboardButton(text="🎁 Забрать подарок новичка",  callback_data="gift_newbie"))
+    if message.from_user.id in ADMIN_IDS:
+        b.row(types.InlineKeyboardButton(text="⚙️ Настройки бота", callback_data="adm_main"))
     await message.answer("С чего начнём? 👇", reply_markup=b.as_markup())
 
 
@@ -218,9 +239,14 @@ async def hits_catalog(cb: types.CallbackQuery):
         "🌹 <b>Парфюм:</b> создаётся во Франции великими парфюмерами (Пьер Бурдон, Бертран Дюшофур)"
     )
     b = InlineKeyboardBuilder()
-    b.row(types.InlineKeyboardButton(text="🏠 Эко-дом (обзор)",             callback_data="cat_health"))
-    b.row(types.InlineKeyboardButton(text="💄 Красота и уход",               callback_data="cat_beauty"))
-    b.row(types.InlineKeyboardButton(text="💅 Декоративная косметика",        callback_data="cat_makeup"))
+    b.row(types.InlineKeyboardButton(text="🏠 Эко-дом",             callback_data="cat_health"))
+    b.row(types.InlineKeyboardButton(text="💄 Красота и уход",       callback_data="cat_beauty"))
+    b.row(types.InlineKeyboardButton(text="💅 Декоративная косметика", callback_data="cat_makeup"))
+    b.row(
+        types.InlineKeyboardButton(text="👗 Колготки и бельё", callback_data="cat_clothes"),
+        types.InlineKeyboardButton(text="👶 Детское",           callback_data="cat_kids_btn"),
+    )
+    b.row(types.InlineKeyboardButton(text="👨 Мужчинам",       callback_data="cat_men_btn"))
     try:
         await cb.message.edit_text(text, reply_markup=b.as_markup())
     except Exception:
@@ -269,18 +295,168 @@ async def cat_health(cb: types.CallbackQuery):
     bot_db.log_event(cb.from_user.id, "cat_health")
     text = (
         "🏠 <b>Эко-дом — чистота без химии</b>\n\n"
-        "Линейка FaberHome — профессиональная уборка без агрессивной химии.\n\n"
-        "Что входит:\n"
-        "• Стиральный порошок и гель\n"
-        "• Средство для посуды\n"
-        "• Чистящие средства для ванной и кухни\n"
-        "• Освежители воздуха\n\n"
-        "🌿 Состав без хлора, фосфатов и лишних отдушек. Безопасно для детей и животных."
+        "Линейка FaberHome — профессиональная уборка без агрессивной химии.\n"
+        "Без хлора, фосфатов, безопасно для детей и животных. Выбери категорию 👇"
     )
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="👕 Уход за одеждой / стирка", callback_data="eco_laundry"))
+    b.row(types.InlineKeyboardButton(text="👟 Уход за обувью",            callback_data="eco_shoes"))
+    b.row(types.InlineKeyboardButton(text="🍽 Уход за посудой",           callback_data="eco_dishes"))
+    b.row(types.InlineKeyboardButton(text="🚿 Ванная и туалет",           callback_data="eco_bathroom"))
+    b.row(types.InlineKeyboardButton(text="🍳 Уход за кухней",            callback_data="eco_kitchen"))
+    b.row(types.InlineKeyboardButton(text="✨ Уход за поверхностями",     callback_data="eco_surfaces"))
+    b.row(types.InlineKeyboardButton(text="🌸 Ароматизация воздуха",      callback_data="eco_aroma"))
+    b.row(types.InlineKeyboardButton(text="← Назад",                     callback_data="hits_catalog"))
     try:
-        await cb.message.edit_text(text, reply_markup=_catalog_kb("catalog_health"))
+        await cb.message.edit_text(text, reply_markup=b.as_markup())
     except Exception:
-        await bot.send_message(cb.message.chat.id, text, reply_markup=_catalog_kb("catalog_health"))
+        await bot.send_message(cb.message.chat.id, text, reply_markup=b.as_markup())
+
+
+def _eco_kb(link_key: str) -> types.InlineKeyboardMarkup:
+    links = load_links()
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="🛒 Открыть каталог", url=links[link_key]))
+    b.row(types.InlineKeyboardButton(text="✅ Хочу — зарегистрироваться", callback_data="go_reg"))
+    b.row(types.InlineKeyboardButton(text="← Назад",                     callback_data="cat_health"))
+    return b.as_markup()
+
+
+ECO_CARDS = {
+    "eco_laundry": (
+        "cat_laundry",
+        "👕 <b>Уход за одеждой и стирка</b>\n\n"
+        "• Стиральные порошки и гели — без фосфатов\n"
+        "• Капсулы и таблетки для стирки\n"
+        "• Кондиционеры и ополаскиватели\n"
+        "• Пятновыводители\n\n"
+        "🌿 Безопасно для чувствительной кожи и детских вещей.",
+    ),
+    "eco_shoes": (
+        "cat_shoes",
+        "👟 <b>Уход за обувью</b>\n\n"
+        "• Кремы и спреи для кожи\n"
+        "• Водоотталкивающая пропитка\n"
+        "• Средства для замши и нубука\n"
+        "• Дезодоранты для обуви\n\n"
+        "✨ Профессиональный уход в домашних условиях.",
+    ),
+    "eco_dishes": (
+        "cat_dishes",
+        "🍽 <b>Уход за посудой</b>\n\n"
+        "• Гель и средства для мытья посуды вручную\n"
+        "• Таблетки и порошок для посудомоечных машин\n"
+        "• Соль и ополаскиватель для ПММ\n\n"
+        "💧 Быстро смывается, не оставляет разводов.",
+    ),
+    "eco_bathroom": (
+        "cat_bathroom",
+        "🚿 <b>Ванная и туалет</b>\n\n"
+        "• Чистящий гель для ванны и душевой кабины\n"
+        "• Средство против известкового налёта\n"
+        "• Чистящий гель для унитаза\n"
+        "• Таблетки для бачка\n\n"
+        "⚡ Действует за 3 минуты, без хлора.",
+    ),
+    "eco_kitchen": (
+        "cat_kitchen",
+        "🍳 <b>Уход за кухней</b>\n\n"
+        "• Антижир для плит и духовок\n"
+        "• Средство для чистки микроволновок\n"
+        "• Обезжириватель для поверхностей\n\n"
+        "🔥 Щелочная формула растворяет жир в кашицу. Работает как профессиональный клининг.",
+    ),
+    "eco_surfaces": (
+        "cat_surfaces",
+        "✨ <b>Уход за поверхностями</b>\n\n"
+        "• Универсальные чистящие средства\n"
+        "• Спреи для стёкол и зеркал\n"
+        "• Полироли для мебели\n"
+        "• Влажные салфетки для уборки\n\n"
+        "🌿 Без агрессивных компонентов.",
+    ),
+    "eco_aroma": (
+        "cat_aroma",
+        "🌸 <b>Ароматизация воздуха и тканей</b>\n\n"
+        "• Освежители воздуха (спреи, диффузоры)\n"
+        "• Ароматические саше\n"
+        "• Средства для ароматизации белья при стирке\n\n"
+        "💐 Французские ароматические композиции. Долго держатся.",
+    ),
+}
+
+
+@dp.callback_query(F.data.in_(set(ECO_CARDS.keys())))
+async def eco_category(cb: types.CallbackQuery):
+    await cb.answer()
+    link_key, text = ECO_CARDS[cb.data]
+    bot_db.log_event(cb.from_user.id, cb.data)
+    try:
+        await cb.message.edit_text(text, reply_markup=_eco_kb(link_key))
+    except Exception:
+        await bot.send_message(cb.message.chat.id, text, reply_markup=_eco_kb(link_key))
+
+
+@dp.callback_query(F.data == "cat_clothes")
+async def cat_clothes(cb: types.CallbackQuery):
+    await cb.answer()
+    bot_db.log_event(cb.from_user.id, "cat_clothes")
+    links = load_links()
+    text = "👗 <b>Колготки и нижнее бельё</b>\n\nВыбери категорию 👇"
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="🧦 Колготки",       url=links["cat_tights"]))
+    b.row(types.InlineKeyboardButton(text="👙 Нижнее бельё",   url=links["cat_underwear"]))
+    b.row(types.InlineKeyboardButton(text="✅ Зарегистрироваться (-20%)", callback_data="go_reg"))
+    b.row(types.InlineKeyboardButton(text="← Назад",           callback_data="hits_catalog"))
+    try:
+        await cb.message.edit_text(text, reply_markup=b.as_markup())
+    except Exception:
+        await bot.send_message(cb.message.chat.id, text, reply_markup=b.as_markup())
+
+
+@dp.callback_query(F.data == "cat_kids_btn")
+async def cat_kids_btn(cb: types.CallbackQuery):
+    await cb.answer()
+    bot_db.log_event(cb.from_user.id, "cat_kids")
+    links = load_links()
+    text = (
+        "👶 <b>Детские товары Faberlic</b>\n\n"
+        "• Детская косметика — шампуни, кремы, гели для купания\n"
+        "• Без парабенов, красителей и агрессивных ароматизаторов\n"
+        "• Средства для ухода за кожей малышей\n\n"
+        "🌿 Протестировано дерматологами, безопасно с рождения."
+    )
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="🛒 Открыть каталог",          url=links["cat_kids"]))
+    b.row(types.InlineKeyboardButton(text="✅ Зарегистрироваться (-20%)", callback_data="go_reg"))
+    b.row(types.InlineKeyboardButton(text="← Назад",                     callback_data="hits_catalog"))
+    try:
+        await cb.message.edit_text(text, reply_markup=b.as_markup())
+    except Exception:
+        await bot.send_message(cb.message.chat.id, text, reply_markup=b.as_markup())
+
+
+@dp.callback_query(F.data == "cat_men_btn")
+async def cat_men_btn(cb: types.CallbackQuery):
+    await cb.answer()
+    bot_db.log_event(cb.from_user.id, "cat_men")
+    links = load_links()
+    text = (
+        "👨 <b>Мужчинам от Faberlic</b>\n\n"
+        "• Парфюм — стойкие ароматы от французских домов\n"
+        "• Уход за лицом и телом\n"
+        "• Гели для бритья и после бритья\n"
+        "• Дезодоранты-антиперспиранты\n\n"
+        "💎 Качество класса люкс по цене масс-маркета. Со скидкой ещё дешевле."
+    )
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="🛒 Открыть каталог",          url=links["cat_men"]))
+    b.row(types.InlineKeyboardButton(text="✅ Зарегистрироваться (-20%)", callback_data="go_reg"))
+    b.row(types.InlineKeyboardButton(text="← Назад",                     callback_data="hits_catalog"))
+    try:
+        await cb.message.edit_text(text, reply_markup=b.as_markup())
+    except Exception:
+        await bot.send_message(cb.message.chat.id, text, reply_markup=b.as_markup())
 
 
 @dp.callback_query(F.data == "cat_beauty")
@@ -717,10 +893,18 @@ async def fallback(message: types.Message, state: FSMContext):
 
 def admin_main_kb():
     b = InlineKeyboardBuilder()
-    b.row(types.InlineKeyboardButton(text="📊 Статистика воронки", callback_data="adm_stats"))
-    b.row(types.InlineKeyboardButton(text="🔗 Управление ссылками", callback_data="adm_links"))
-    b.row(types.InlineKeyboardButton(text="📢 Рассылка",            callback_data="adm_broadcast"))
-    b.row(types.InlineKeyboardButton(text="👥 Последние лиды",      callback_data="adm_leads"))
+    b.row(
+        types.InlineKeyboardButton(text="👥 Мои клиенты",   callback_data="adm_leads"),
+        types.InlineKeyboardButton(text="📊 Статистика",     callback_data="adm_stats"),
+    )
+    b.row(
+        types.InlineKeyboardButton(text="🖼 Фото в боте",    callback_data="adm_media"),
+        types.InlineKeyboardButton(text="🔗 Ссылки",         callback_data="adm_links"),
+    )
+    b.row(
+        types.InlineKeyboardButton(text="📢 Рассылка",       callback_data="adm_broadcast"),
+        types.InlineKeyboardButton(text="❓ Помощь",         callback_data="adm_help"),
+    )
     return b.as_markup()
 
 
@@ -793,20 +977,28 @@ async def adm_links(cb: types.CallbackQuery):
     def short(url):
         return url[:40] + "…" if len(url) > 40 else url
 
+    eco_keys = ["cat_laundry","cat_shoes","cat_dishes","cat_bathroom","cat_kitchen","cat_surfaces","cat_aroma"]
+    eco_labels = ["Стирка","Обувь","Посуда","Ванная","Кухня","Поверхности","Ароматизация"]
+    eco_lines = "\n".join(f"{l}: <code>{short(links.get(k,'—'))}</code>" for k,l in zip(eco_keys,eco_labels))
+
     text = (
         "🔗 <b>Текущие ссылки</b>\n\n"
-        f"reg: <code>{short(links['reg'])}</code>\n"
-        f"catalog_beauty: <code>{short(links['catalog_beauty'])}</code>\n"
-        f"catalog_health: <code>{short(links['catalog_health'])}</code>\n"
-        f"catalog_makeup: <code>{short(links['catalog_makeup'])}</code>\n"
-        f"venera_tg: <code>{short(links['venera_tg'])}</code>\n"
+        f"🔑 Реф. регистрация: <code>{short(links['reg'])}</code>\n\n"
+        f"💄 Косметика: <code>{short(links['catalog_beauty'])}</code>\n"
+        f"💅 Макияж: <code>{short(links['catalog_makeup'])}</code>\n\n"
+        f"🏠 Эко-дом категории:\n{eco_lines}\n\n"
+        f"👗 Колготки: <code>{short(links.get('cat_tights','—'))}</code>\n"
+        f"👙 Бельё: <code>{short(links.get('cat_underwear','—'))}</code>\n"
+        f"👶 Детское: <code>{short(links.get('cat_kids','—'))}</code>\n"
+        f"👨 Мужское: <code>{short(links.get('cat_men','—'))}</code>"
     )
     b = InlineKeyboardBuilder()
-    b.row(types.InlineKeyboardButton(text="💄 Каталог косметика", callback_data="adm_set_beauty"))
-    b.row(types.InlineKeyboardButton(text="🏠 Каталог эко-дом",   callback_data="adm_set_health"))
-    b.row(types.InlineKeyboardButton(text="💅 Каталог макияж",    callback_data="adm_set_makeup"))
-    b.row(types.InlineKeyboardButton(text="🔗 Реф. ссылка",       callback_data="adm_set_reg"))
-    b.row(types.InlineKeyboardButton(text="← Назад",              callback_data="adm_main"))
+    b.row(types.InlineKeyboardButton(text="🔑 Реф. ссылка (регистрация)",  callback_data="adm_set_reg"))
+    b.row(types.InlineKeyboardButton(text="💄 Каталог косметики",           callback_data="adm_set_beauty"))
+    b.row(types.InlineKeyboardButton(text="💅 Каталог макияжа",             callback_data="adm_set_makeup"))
+    b.row(types.InlineKeyboardButton(text="🏠 Эко-дом: ссылки категорий",  callback_data="adm_links_eco"))
+    b.row(types.InlineKeyboardButton(text="👗 Одежда / бельё / дети / муж", callback_data="adm_links_other"))
+    b.row(types.InlineKeyboardButton(text="← Назад",                        callback_data="adm_main"))
     try:
         await cb.message.edit_text(text, reply_markup=b.as_markup())
     except Exception:
@@ -814,10 +1006,21 @@ async def adm_links(cb: types.CallbackQuery):
 
 
 LINK_KEY_NAMES = {
-    "adm_set_beauty": ("catalog_beauty", "каталог косметики"),
-    "adm_set_health": ("catalog_health", "каталог эко-дом"),
-    "adm_set_makeup": ("catalog_makeup", "каталог макияжа"),
-    "adm_set_reg":    ("reg",            "реферальная ссылка"),
+    "adm_set_beauty":    ("catalog_beauty",  "каталог косметики"),
+    "adm_set_health":    ("catalog_health",  "каталог эко-дом"),
+    "adm_set_makeup":    ("catalog_makeup",  "каталог макияжа"),
+    "adm_set_reg":       ("reg",             "реферальная ссылка"),
+    "adm_set_laundry":   ("cat_laundry",     "стирка и одежда"),
+    "adm_set_shoes":     ("cat_shoes",       "уход за обувью"),
+    "adm_set_dishes":    ("cat_dishes",      "уход за посудой"),
+    "adm_set_bathroom":  ("cat_bathroom",    "ванная и туалет"),
+    "adm_set_kitchen":   ("cat_kitchen",     "уход за кухней"),
+    "adm_set_surfaces":  ("cat_surfaces",    "уход за поверхностями"),
+    "adm_set_aroma":     ("cat_aroma",       "ароматизация воздуха"),
+    "adm_set_tights":    ("cat_tights",      "колготки"),
+    "adm_set_underwear": ("cat_underwear",   "нижнее бельё"),
+    "adm_set_kids":      ("cat_kids",        "детские товары"),
+    "adm_set_men":       ("cat_men",         "мужской каталог"),
 }
 
 
@@ -858,6 +1061,39 @@ async def adm_receive_link(message: types.Message, state: FSMContext):
         f"✅ Ссылка <b>{link_key}</b> обновлена:\n<code>{new_url}</code>",
         reply_markup=b.as_markup(),
     )
+
+
+@dp.callback_query(F.data == "adm_links_eco")
+async def adm_links_eco(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS:
+        await cb.answer("Нет доступа")
+        return
+    await cb.answer()
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="👕 Стирка",          callback_data="adm_set_laundry"))
+    b.row(types.InlineKeyboardButton(text="👟 Обувь",           callback_data="adm_set_shoes"))
+    b.row(types.InlineKeyboardButton(text="🍽 Посуда",          callback_data="adm_set_dishes"))
+    b.row(types.InlineKeyboardButton(text="🚿 Ванная",          callback_data="adm_set_bathroom"))
+    b.row(types.InlineKeyboardButton(text="🍳 Кухня",           callback_data="adm_set_kitchen"))
+    b.row(types.InlineKeyboardButton(text="✨ Поверхности",     callback_data="adm_set_surfaces"))
+    b.row(types.InlineKeyboardButton(text="🌸 Ароматизация",    callback_data="adm_set_aroma"))
+    b.row(types.InlineKeyboardButton(text="← Назад",           callback_data="adm_links"))
+    await cb.message.edit_text("🏠 <b>Ссылки Эко-дом</b>\n\nВыбери категорию для обновления:", reply_markup=b.as_markup())
+
+
+@dp.callback_query(F.data == "adm_links_other")
+async def adm_links_other(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS:
+        await cb.answer("Нет доступа")
+        return
+    await cb.answer()
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="🧦 Колготки",      callback_data="adm_set_tights"))
+    b.row(types.InlineKeyboardButton(text="👙 Нижнее бельё",  callback_data="adm_set_underwear"))
+    b.row(types.InlineKeyboardButton(text="👶 Детское",       callback_data="adm_set_kids"))
+    b.row(types.InlineKeyboardButton(text="👨 Мужское",       callback_data="adm_set_men"))
+    b.row(types.InlineKeyboardButton(text="← Назад",         callback_data="adm_links"))
+    await cb.message.edit_text("👗 <b>Ссылки: одежда и другие категории</b>\n\nВыбери что обновить:", reply_markup=b.as_markup())
 
 
 @dp.callback_query(F.data == "adm_broadcast")
@@ -931,24 +1167,194 @@ async def adm_leads(cb: types.CallbackQuery):
     leads = bot_db.get_recent_leads(10)
 
     if not leads:
-        text = "Лидов пока нет."
+        text = "👥 <b>Мои клиенты</b>\n\nПока никто не написал боту."
     else:
         parts = []
         for lead in leads:
             parts.append(
-                f"👤 Имя: {lead.get('name') or lead.get('first_name') or '—'}\n"
-                f"📱 Тел: {lead.get('phone') or '—'}\n"
-                f"📅 Дата: {(lead.get('last_seen') or '')[:16]}\n"
-                f"🚩 Источник: {label_source(lead.get('source'))}"
+                f"👤 {lead.get('name') or lead.get('first_name') or '—'}\n"
+                f"📱 {lead.get('phone') or '—'}\n"
+                f"📅 {(lead.get('last_seen') or '')[:16]}\n"
+                f"🚩 {label_source(lead.get('source'))}"
             )
-        text = "👥 <b>Последние лиды</b>\n\n" + "\n\n".join(parts)
+        text = "👥 <b>Последние клиенты</b>\n\n" + "\n\n".join(parts)
 
     b = InlineKeyboardBuilder()
-    b.row(types.InlineKeyboardButton(text="← Назад", callback_data="adm_main"))
+    b.row(types.InlineKeyboardButton(text="📥 Скачать всех в Excel",  callback_data="adm_export"))
+    b.row(types.InlineKeyboardButton(text="← Назад",                   callback_data="adm_main"))
     try:
         await cb.message.edit_text(text, reply_markup=b.as_markup())
     except Exception:
         await bot.send_message(cb.message.chat.id, text, reply_markup=b.as_markup())
+
+
+@dp.callback_query(F.data == "adm_export")
+async def adm_export(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS:
+        await cb.answer("Нет доступа")
+        return
+    await cb.answer()
+    await bot.send_message(cb.message.chat.id, "📥 Формирую таблицу, секунду...")
+
+    fields = ["tg_id", "username", "first_name", "name", "source",
+              "funnel_stage", "first_seen", "last_seen", "phone", "completed_at"]
+    with bot_db.conn() as c:
+        rows = c.execute(
+            "SELECT tg_id, username, first_name, name, source, "
+            "funnel_stage, first_seen, last_seen, phone, completed_at "
+            "FROM users ORDER BY first_seen DESC"
+        ).fetchall()
+
+    tmp = Path(tempfile.mktemp(suffix=".csv"))
+    with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row[k] for k in fields})
+
+    await bot.send_document(
+        cb.message.chat.id,
+        types.FSInputFile(str(tmp), filename="clients_venera.csv"),
+        caption=f"Клиенты — {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC",
+    )
+    tmp.unlink(missing_ok=True)
+
+
+@dp.callback_query(F.data == "adm_media")
+async def adm_media(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS:
+        await cb.answer("Нет доступа")
+        return
+    await cb.answer()
+    MEDIA_DIR.mkdir(exist_ok=True)
+    files = list(MEDIA_DIR.iterdir())
+    current = ", ".join(f.name for f in files) if files else "нет загруженных фото"
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="📸 Моё фото (приветствие /start)", callback_data="adm_photo_venera"))
+    b.row(types.InlineKeyboardButton(text="🎬 Видео-приветствие",             callback_data="adm_video_venera"))
+    b.row(types.InlineKeyboardButton(text="🗑 Удалить фото",                   callback_data="adm_delete_photo"))
+    b.row(types.InlineKeyboardButton(text="← Назад",                          callback_data="adm_main"))
+    await cb.message.edit_text(
+        f"🖼 <b>Фото и видео в боте</b>\n\n"
+        f"Сейчас загружено: <b>{current}</b>\n\n"
+        "Когда пользователь пишет /start — бот показывает твоё фото или видео.\n"
+        "Загрузи новое 👇",
+        reply_markup=b.as_markup(),
+    )
+
+
+@dp.callback_query(F.data.in_({"adm_photo_venera", "adm_video_venera"}))
+async def adm_photo_start(cb: types.CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS:
+        await cb.answer("Нет доступа")
+        return
+    await cb.answer()
+    is_video = cb.data == "adm_video_venera"
+    slot = "venera_intro" if is_video else "venera"
+    ext = "mp4" if is_video else "jpg"
+    await state.set_state(Admin.awaiting_photo_upload)
+    await state.update_data(photo_slot=slot, photo_ext=ext, is_video=is_video)
+    kind = "видео (MP4)" if is_video else "фото"
+    await cb.message.edit_text(
+        f"Отправь мне своё {kind} — просто прикрепи файл и нажми отправить.\n\n"
+        "(Отмена — напиши /admin)"
+    )
+
+
+@dp.message(Admin.awaiting_photo_upload)
+async def adm_receive_media(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+    data = await state.get_data()
+    slot = data.get("photo_slot", "media")
+    ext = data.get("photo_ext", "jpg")
+    is_video = data.get("is_video", False)
+    MEDIA_DIR.mkdir(exist_ok=True)
+    dest = MEDIA_DIR / f"{slot}.{ext}"
+
+    if is_video and message.video:
+        await bot.download(message.video, destination=str(dest))
+    elif not is_video and message.photo:
+        await bot.download(message.photo[-1], destination=str(dest))
+    else:
+        kind = "видео" if is_video else "фото"
+        await message.answer(f"Нужно прислать именно {kind}, не текст.")
+        return
+
+    await state.clear()
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="← Назад в настройки", callback_data="adm_main"))
+    await message.answer("✅ Сохранено! Теперь бот покажет новый файл при /start", reply_markup=b.as_markup())
+
+
+@dp.callback_query(F.data == "adm_delete_photo")
+async def adm_delete_photo(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS:
+        await cb.answer("Нет доступа")
+        return
+    await cb.answer()
+    MEDIA_DIR.mkdir(exist_ok=True)
+    files = list(MEDIA_DIR.iterdir())
+    if not files:
+        await cb.message.edit_text(
+            "Папка с медиа пуста — удалять нечего.",
+            reply_markup=(InlineKeyboardBuilder().row(
+                types.InlineKeyboardButton(text="← Назад", callback_data="adm_media")
+            ).as_markup()),
+        )
+        return
+    b = InlineKeyboardBuilder()
+    for f in files:
+        b.row(types.InlineKeyboardButton(text=f"🗑 {f.name}", callback_data=f"adm_delfile_{f.name}"))
+    b.row(types.InlineKeyboardButton(text="← Назад", callback_data="adm_media"))
+    await cb.message.edit_text(
+        "⚠️ Выбери файл для удаления (удалённое не восстановить):",
+        reply_markup=b.as_markup(),
+    )
+
+
+@dp.callback_query(F.data.startswith("adm_delfile_"))
+async def adm_delfile(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS:
+        await cb.answer("Нет доступа")
+        return
+    await cb.answer()
+    fname = cb.data.removeprefix("adm_delfile_")
+    target = MEDIA_DIR / fname
+    if target.exists():
+        target.unlink()
+        await cb.message.edit_text(
+            f"✅ Файл <b>{fname}</b> удалён.",
+            reply_markup=(InlineKeyboardBuilder().row(
+                types.InlineKeyboardButton(text="← Назад", callback_data="adm_media")
+            ).as_markup()),
+        )
+    else:
+        await cb.message.edit_text("Файл не найден.", reply_markup=(InlineKeyboardBuilder().row(
+            types.InlineKeyboardButton(text="← Назад", callback_data="adm_media")
+        ).as_markup()))
+
+
+@dp.callback_query(F.data == "adm_help")
+async def adm_help(cb: types.CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS:
+        await cb.answer("Нет доступа")
+        return
+    await cb.answer()
+    b = InlineKeyboardBuilder()
+    b.row(types.InlineKeyboardButton(text="← Назад", callback_data="adm_main"))
+    await cb.message.edit_text(
+        "❓ <b>Как пользоваться настройками</b>\n\n"
+        "👥 <b>Мои клиенты</b> — список людей, которые написали боту. "
+        "Можно скачать таблицу в Excel.\n\n"
+        "📊 <b>Статистика</b> — сколько людей зашло, сколько нажало зарегистрироваться.\n\n"
+        "🖼 <b>Фото в боте</b> — поменяй своё фото или видео, которое показывается при /start.\n\n"
+        "🔗 <b>Ссылки</b> — обнови реферальные ссылки на каталоги. "
+        "Нужно менять каждый каталог.\n\n"
+        "📢 <b>Рассылка</b> — отправь сообщение сразу всем, кто писал боту.\n\n"
+        "Если что-то не работает — напиши Раилю 💬",
+        reply_markup=b.as_markup(),
+    )
 
 
 # ─── /stats и /reset (для обратной совместимости) ────────────────────────────
