@@ -205,23 +205,24 @@ async def cmd_start(message: types.Message, state: FSMContext):
         "1️⃣ Экономить семейный бюджет\n"
         "2️⃣ Получать подарки\n"
         "3️⃣ Создать источник дополнительного дохода, просто делясь своими отзывами\n\n"
-        "С чего начнём?"
+        "Выбирай, с чего начнём 👇"
     )
-
-    video_sent = await send_video_if_exists(message.chat.id, "venera_intro.mp4")
-    if video_sent:
-        await message.answer(welcome)
-    else:
-        photo_sent = await send_photo_if_exists(message.chat.id, "venera.jpg", caption=welcome)
-        if not photo_sent:
-            await message.answer(welcome)
 
     b = InlineKeyboardBuilder()
     b.row(types.InlineKeyboardButton(text="⭐ Посмотреть хиты каталога", callback_data="hits_catalog"))
     b.row(types.InlineKeyboardButton(text="🎁 Забрать подарок новичка",  callback_data="gift_newbie"))
     if message.from_user.id in ADMIN_IDS:
         b.row(types.InlineKeyboardButton(text="⚙️ Настройки бота", callback_data="adm_main"))
-    await message.answer("С чего начнём? 👇", reply_markup=b.as_markup())
+
+    video_sent = await send_video_if_exists(message.chat.id, "venera_intro.mp4")
+    if video_sent:
+        await message.answer(welcome, reply_markup=b.as_markup())
+    else:
+        photo_sent = await send_photo_if_exists(message.chat.id, "venera.jpg", caption=welcome)
+        if photo_sent:
+            await message.answer("Выбирай 👇", reply_markup=b.as_markup())
+        else:
+            await message.answer(welcome, reply_markup=b.as_markup())
 
 
 # ─── ХИТЫ КАТАЛОГА ───────────────────────────────────────────────────────────
