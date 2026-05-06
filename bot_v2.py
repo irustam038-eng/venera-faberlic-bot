@@ -42,14 +42,16 @@ TEXTS_FILE = Path(__file__).parent / "texts.json"
 
 # Ссылки по образцу VK-бота (links.json)
 DEFAULT_LINKS = {
-    "reg":             "https://faberlic.com/register?sponsornumber=739945401&lang=ru&r=1000034210371",
-    "catalog":         "https://kabinet-faberlic.com/catalogs/catalog-faberlic-6-2026-russia/#p=340",
+    "reg":             "https://clck.ru/3TSfhb",
+    "catalog":         "https://clck.ru/3TQgSf",
+    "catalog_avon":    "https://clck.ru/3TQgU4",
     "catalog_care":    "https://faberlic.com/ru/ru/category/13.02.01.00.00?sponsornumber=722761514&page=0",
     "catalog_home":    "https://faberlic.com/ru/ru/category/05.01.02.00.00?sponsornumber=722761514&page=0",
     "catalog_health":  "https://faberlic.com/ru/ru/category/06.13.03.00.00?sponsornumber=722761514&page=0",
+    "catalog_eastern": "https://clck.ru/3TQgWy",
     "catalog_perfume": "https://faberlic.com/ru/ru/category/02.01.01.00.00?sponsornumber=722761514&page=0",
     "catalog_makeup":  "https://faberlic.com/ru/ru/category/12.01.00.00.00?sponsornumber=722761514&page=0",
-    "catalog_sets":    "https://faberlic.com/ru/ru/tag/new?sponsornumber=722761514&page=0",
+    "catalog_sets":    "https://clck.ru/3TQgaw",
     # Контакты Венеры
     "venera_tg":   "https://t.me/Venera25Naz",
     "vk_group":    "https://vk.ru/club235304738",
@@ -331,7 +333,8 @@ async def cb_health_main(cb: types.CallbackQuery):
     text = (
         "💊 <b>Здоровье и стройность Faberlic</b>\n\n"
         "Wellness-коктейли, БАДы, программы стройности.\n\n"
-        f"Посмотреть каталог:\n{links.get('catalog_health', links['catalog'])}"
+        f"◾ Здоровье и стройность:\n{links.get('catalog_health', links['catalog'])}\n\n"
+        f"◾ Восточный секрет (японская медицина, добавки):\n{links.get('catalog_eastern', links['catalog'])}"
     )
     b = InlineKeyboardBuilder()
     b.row(types.InlineKeyboardButton(text="✅ Хочу зарегистрироваться", url=links["reg"]))
@@ -380,7 +383,8 @@ async def cb_catalog_btn(cb: types.CallbackQuery):
         f"◾ ПАРФЮМЕРИЯ И АРОМАТЫ:\n{links.get('catalog_perfume', links['catalog'])}\n\n"
         f"◾ ВСЁ ДЛЯ МАКИЯЖА:\n{links.get('catalog_makeup', links['catalog'])}\n\n"
         f"◾ НОВИНКИ:\n{links.get('catalog_sets', links['catalog'])}\n\n"
-        f"👉 ПОЛНЫЙ КАТАЛОГ:\n{links['catalog']}"
+        f"📖 КАТАЛОГ FABERLIC:\n{links['catalog']}\n\n"
+        f"📖 КАТАЛОГ AVON:\n{links.get('catalog_avon', links['catalog'])}"
     )
     b = InlineKeyboardBuilder()
     b.row(types.InlineKeyboardButton(text="✅ Зарегистрироваться (-20%)", url=links["reg"]))
