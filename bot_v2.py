@@ -382,7 +382,7 @@ async def cb_catalog_btn(cb: types.CallbackQuery):
         f"◾ ЗДОРОВЬЕ И СТРОЙНОСТЬ:\n{links.get('catalog_health', links['catalog'])}\n\n"
         f"◾ ПАРФЮМЕРИЯ И АРОМАТЫ:\n{links.get('catalog_perfume', links['catalog'])}\n\n"
         f"◾ ВСЁ ДЛЯ МАКИЯЖА:\n{links.get('catalog_makeup', links['catalog'])}\n\n"
-        f"◾ НОВИНКИ:\n{links.get('catalog_sets', links['catalog'])}\n\n"
+        f"◾ НОВИНКИ FABERLIC:\n{links.get('catalog_sets', links['catalog'])}\n\n"
         f"📖 КАТАЛОГ FABERLIC:\n{links['catalog']}\n\n"
         f"📖 КАТАЛОГ AVON:\n{links.get('catalog_avon', links['catalog'])}"
     )
